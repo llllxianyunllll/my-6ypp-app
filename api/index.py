@@ -1,12 +1,11 @@
 # api/index.py
 from http.server import BaseHTTPRequestHandler
 import json
-import datetime
 from urllib.parse import urlparse, parse_qs
-import sxtwl  # 必须在 requirements.txt 中添加 sxtwl
+from lunar_python import Solar  # 替换 sxtwl 为 lunar_python
 
 # ==========================================
-# 1. 基础字典与配置 (来自 auxiliary_tools.py & hexagram_data.py)
+# 1. 基础字典与配置
 # ==========================================
 GAN = ["甲", "乙", "丙", "丁", "戊", "己", "庚", "辛", "壬", "癸"]
 ZHI = ["子", "丑", "寅", "卯", "辰", "巳", "午", "未", "申", "酉", "戌", "亥"]
@@ -23,7 +22,7 @@ PALACE_PROPERTIES = {
 }
 
 # ==========================================
-# 六十四卦全量字典
+# 2. 六十四卦全量字典
 # ==========================================
 # Key规则: 下卦二进制 + 上卦二进制 (从初爻到上爻, 0=阴, 1=阳)
 DATA_64 = {
@@ -108,17 +107,6 @@ DATA_64 = {
     "000010": {"name": "水地比", "gong": "坤", "shi": 3, "ying": 6, "nature": "归魂", "label": "归魂"},
 }
 
-# 为了代码能跑，我补充几个关键卦象避免报错，你部署时请务必把你的 DATA_64 完整版填回来
-DATA_64.update({
-    "000000": {"name": "坤为地", "gong": "坤", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-    "101101": {"name": "离为火", "gong": "离", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-    "010010": {"name": "坎为水", "gong": "坎", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-    "100100": {"name": "震为雷", "gong": "震", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-    "001001": {"name": "艮为山", "gong": "艮", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-    "011011": {"name": "巽为风", "gong": "巽", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-    "110110": {"name": "兑为泽", "gong": "兑", "shi": 6, "ying": 3, "nature": "六冲", "label": "本宫"},
-})
-
 YAO_MAP = {
     6: {"name": "老阴", "val": 0, "change": 1, "is_moving": True, "symbol": "== x =="},
     7: {"name": "少阳", "val": 1, "change": 1, "is_moving": False, "symbol": "======="},
@@ -157,7 +145,7 @@ NAJIA_RULES = {
 
 
 # ==========================================
-# 2. 核心类定义 (合并自各文件)
+# 2. 核心类定义
 # ==========================================
 
 class LiuShouSolver:
@@ -199,49 +187,34 @@ class XunKongSolver:
 
 
 class TimeEngine:
-    # 简化版的 TimeEngine，去掉了大量 print，只返回四柱字典
+    # 升级版：使用 lunar_python 替代 sxtwl
     def get_four_pillars_dict(self, year, month, day, hour, minute):
-        # 1. 计算 JD
-        if month <= 2:
-            year -= 1
-            month += 12
-        a = year // 100
-        b = 2 - a + a // 4
-        jd = int(365.25 * (year + 4716)) + int(30.6001 * (month + 1)) + day + b - 1524.5
-        fraction = (hour + minute / 60.0) / 24.0
-        current_jd = jd + fraction
+        # 1. 创建 Solar 对象
+        solar = Solar.fromYmdHms(year, month, day, hour, minute, 0)
+        lunar = solar.getLunar()
 
-        # 恢复年份用于后续计算 (如果上面减了1)
-        calc_year = year + 1 if month > 12 else year
-        calc_month = month - 12 if month > 12 else month
+        # 2. 获取八字 (lunar_python 自动处理了立春、晚子时等复杂逻辑)
+        # setSect(2) 代表晚子时算第二天日柱（符合大多数排盘习惯）
+        bazi = lunar.getEightChar()
+        bazi.setSect(2)
 
-        # 2. 立春判断 (简化逻辑，实际应调用 sxtwl)
-        # 这里为了演示直接使用 sxtwl
-        solar_day = sxtwl.fromSolar(calc_year, calc_month, day)
-        gz = solar_day.getHourGZ(hour)
-        y_gz = solar_day.getYearGZ()
-        m_gz = solar_day.getMonthGZ()
-        d_gz = solar_day.getDayGZ()
-
-        # sxtwl 的干支索引 0-9, 0-11
-        year_pillar = GAN[y_gz.tg] + ZHI[y_gz.dz]
-        month_pillar = GAN[m_gz.tg] + ZHI[m_gz.dz]
-        day_pillar = GAN[d_gz.tg] + ZHI[d_gz.dz]
-        hour_pillar = GAN[gz.tg] + ZHI[gz.dz]
+        year_pillar = bazi.getYear()
+        month_pillar = bazi.getMonth()
+        day_pillar = bazi.getDay()
+        hour_pillar = bazi.getTime()
 
         return {
             "year": year_pillar,
             "month": month_pillar,
             "day": day_pillar,
             "hour": hour_pillar,
-            "day_gan": GAN[d_gz.tg],
-            "day_zhi": ZHI[d_gz.dz]
+            "day_gan": day_pillar[0],  # 取第一个字为干
+            "day_zhi": day_pillar[1]  # 取第二个字为支
         }
 
 
 def get_hexagram_info(binary_list):
     key = "".join(str(b) for b in binary_list)
-    # 如果找不到，尝试去 DATA_64 里找
     if key in DATA_64:
         info = DATA_64[key].copy()
         gong_name = info["gong"]
@@ -296,32 +269,23 @@ class NajiaEngine:
 
 class handler(BaseHTTPRequestHandler):
     def do_GET(self):
-        # 1. 允许跨域
         self.send_response(200)
         self.send_header('Content-type', 'application/json')
         self.send_header('Access-Control-Allow-Origin', '*')
         self.end_headers()
 
         try:
-            # 2. 解析参数
             query = urlparse(self.path).query
             params = parse_qs(query)
 
-            # 默认参数（如果没传）
             year = int(params.get('year', [2026])[0])
             month = int(params.get('month', [2])[0])
             day = int(params.get('day', [10])[0])
             hour = int(params.get('hour', [12])[0])
-
-            # 获取六爻输入 (例如 ?q=8,8,8,8,8,9)
-            # 或者是 q1=8&q2=8...
-            # 这里简化，假设通过 ?yao=8,8,8,8,8,9 传入
             yao_str = params.get('yao', ["8,8,8,8,8,8"])[0]
             user_input = [int(x) for x in yao_str.split(',')]
 
-            # 3. 执行逻辑 (Controller)
-
-            # A. 时间计算
+            # A. 时间
             time_engine = TimeEngine()
             bazi = time_engine.get_four_pillars_dict(year, month, day, hour, 0)
 
@@ -344,22 +308,19 @@ class handler(BaseHTTPRequestHandler):
                     "is_moving": info["is_moving"]
                 })
 
-            # D. 识别卦名
+            # D. 纳甲
             ben_gua_info = get_hexagram_info(base_code)
             zhi_gua_info = get_hexagram_info(future_code)
 
-            # E. 纳甲
             najia = NajiaEngine()
             ben_gua_lines = najia.perform_najia(base_code, ben_gua_info.get('gong_element', '未知'))
 
-            # F. 变卦纳甲
             zhi_gua_lines = []
             if base_code != future_code:
                 zhi_gua_lines = najia.perform_najia(future_code, ben_gua_info.get('gong_element', '未知'))
             else:
-                zhi_gua_lines = ben_gua_lines  # 没变卦就复制一份
+                zhi_gua_lines = ben_gua_lines
 
-            # G. 伏神
             fushen_map = {}
             gong_name = ben_gua_info.get('gong', '')
             if gong_name in PALACE_PROPERTIES:
@@ -367,7 +328,7 @@ class handler(BaseHTTPRequestHandler):
                 ben_gong_lines = najia.perform_najia(gong_code, ben_gua_info.get('gong_element'))
                 fushen_map = najia.find_fushen(ben_gua_lines, ben_gua_info.get('gong_element'), ben_gong_lines)
 
-            # 4. 组装结果
+            # 组装结果
             response_data = {
                 "status": "success",
                 "bazi": bazi,
@@ -389,9 +350,7 @@ class handler(BaseHTTPRequestHandler):
                 "lines": []
             }
 
-            # 组合每一爻的详细信息
             for i in range(6):
-                # i=0是初爻
                 line_data = {
                     "position": i + 1,
                     "beast": six_beasts[i],
@@ -406,7 +365,6 @@ class handler(BaseHTTPRequestHandler):
                     },
                     "zhi_gua": {}
                 }
-
                 if hexagram_data[i]['is_moving']:
                     line_data["zhi_gua"] = {
                         "gan": zhi_gua_lines[i]['gan'],
@@ -414,10 +372,8 @@ class handler(BaseHTTPRequestHandler):
                         "element": zhi_gua_lines[i]['element'],
                         "relation": zhi_gua_lines[i]['relation']
                     }
-
                 response_data["lines"].append(line_data)
 
-            # 5. 发送 JSON
             self.wfile.write(json.dumps(response_data, ensure_ascii=False).encode('utf-8'))
 
         except Exception as e:
